@@ -31,6 +31,11 @@ type Client interface {
 	// The response is checked for an error and the is returned
 	// if it exists
 	Query(q Query) (*Response, error)
+
+	// QueryFlux is for querying Influxdb with the Flux language
+	// The response is checked for an error and the is returned
+	// if it exists
+	QueryFlux(q FluxQuery) (*Response, error)
 }
 
 type ClientUpdater interface {
@@ -59,6 +64,13 @@ type Query struct {
 	Command   string
 	Database  string
 	Precision string
+}
+
+type FluxQuery struct {
+	Org   string
+	OrgID string
+	Query string
+	Now   time.Time
 }
 
 // HTTPConfig is the config data needed to create an HTTP Client
@@ -371,6 +383,44 @@ type Result struct {
 	Series   []imodels.Row
 	Messages []*Message
 	Err      string `json:"error,omitempty"`
+}
+
+func (c *HTTPClient) QueryFlux(q FluxQuery) (*Response, error) {
+	u := c.url()
+	u.Path = "/api/v2/query"
+	v := url.Values{}
+	if q.Org != "" {
+		v.Set("org", q.Org)
+	}
+	if q.OrgID != "" {
+		v.Set("orgID", q.OrgID)
+	}
+	u.RawQuery = v.Encode()
+	body, err := json.Marshal(&struct {
+		Type  string `json:"type"`
+		Now   string `json:"now,omitempty"`
+		Query string `json:"query"`
+	}{
+		Type:  "flux",
+		Now:   q.Now.Format(time.RFC3339Nano),
+		Query: q.Query,
+	})
+	req, err := http.NewRequest("POST", u.String(), bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	response := &Response{}
+	_, err = c.do(req, response, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	if err := response.Error(); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 // Query sends a command to the server and returns the Response
